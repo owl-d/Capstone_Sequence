@@ -80,7 +80,6 @@ def detect():
             if (target_object[-1] == "."):
                 target_object = target_object[:-1]
 
-            target_object = "콜라"
             Out_Category = []
             Input_ETRI.append(target_object)
             for ETRI in Input_ETRI:
