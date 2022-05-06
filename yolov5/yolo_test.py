@@ -1,5 +1,5 @@
 
-from Detect_new import run
+from simple_detect import detect
 from PIL import Image
 
 import os
@@ -12,8 +12,14 @@ import threading
 import base64
 import numpy as np
 import cv2 as cv
-
+import json
 yolo_ready_flag = True
+json_class_path = './classify.json'
+json_label_path = './label2name.json'
+with open(json_class_path, 'r', encoding='utf-8') as f:
+	json_data = json.load(f)
+with open(json_label_path, 'r', encoding='utf-8') as f:
+	json_label = json.load(f)
 
 ### Pyro4 Server Declaration ###
 @Pyro4.expose
@@ -64,6 +70,9 @@ while(True):
 	if yolo_ready_flag == True:
 
 		yolo_ready_flag = False
-		run(source = 'from_android.jpg')
-		time.sleep(7)
+		box, max_name, label = detect(SOURCE = 'from_android.jpg',json_label=json_label,json_data=json_data)
+		print('box : ', box)
+		print('max_name :', max_name)
+		print('label :', label)
 		yolo_ready_flag = True
+		time.sleep(7)

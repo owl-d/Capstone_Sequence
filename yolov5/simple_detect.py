@@ -7,6 +7,7 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 import os
 import json
+import shutil
 from glob import glob
 from pathlib import Path
 import sys
@@ -17,6 +18,9 @@ from utils.datasets import letterbox
 from utils.general import check_img_size, check_requirements, non_max_suppression, scale_coords, xyxy2xywh
 from utils.plots import Annotator
 from utils.torch_utils import select_device, time_sync
+from Google_Cloud_Vision_API import GCV_model, CU, GS, Emart24
+#from rembg.bg import remove as remove_bg
+
 
 json_class_path = './classify.json'
 json_label_path = './label2name.json'
@@ -26,7 +30,8 @@ with open(json_label_path, 'r', encoding='utf-8') as f:
     json_label = json.load(f)
 
 yolo_ready_flag = True
-WEIGHTS = 'best.pt'
+object_detect_flag = False
+WEIGHTS = 'back_small.pt'
 IMG_SIZE = 640
 DEVICE = ''
 AUGMENT = False
@@ -34,12 +39,20 @@ CONF_THRES = 0.25
 IOU_THRES = 0.45
 CLASSES = None
 AGNOSTIC_NMS = False
+target_object = "Init"
+target_category = "Init"
+Input_ETRI = []
 
 app = Flask(__name__)
+
+device = select_device(DEVICE)
+model = attempt_load(WEIGHTS, map_location=device)  # load FP32 model
+
 
 @app.route('/', methods=['GET', 'POST'])
 def detect():
     global yolo_ready_flag
+    global object_detect_flag
     global WEIGHTS
     global IMG_SIZE
     global DEVICE
@@ -48,12 +61,69 @@ def detect():
     global IOU_THRES
     global CLASSES
     global AGNOSTIC_NMS
+    global target_object
+    global target_category
+    global Input_ETRI
 
     if request.method == 'POST':
         box_ = []
         labels_ = []
         max_name = []
         _returns = {'start' : 'blank'}
+
+        data = request.data
+
+        ####### etri target receive ############################
+        if data[:4] == b'etri':
+            target_object = data.decode('utf-8')
+            target_object = target_object[4:]
+            if (target_object[-1] == "."):
+                target_object = target_object[:-1]
+
+            target_object = "콜라"
+            Out_Category = []
+            Input_ETRI.append(target_object)
+            for ETRI in Input_ETRI:
+                for key in json_data.keys():
+                    for value in json_data[key]:
+                        if ETRI in value:
+                            Out_Category.append(key)
+
+            target_category = Out_Category[0]
+
+            print("target_object : " + target_object)
+            print("target_category :" + target_category)
+
+            return "TARGET : " + target_object + " - " + target_category
+        ########################################################
+
+        ####### smart bill #####################################
+        if data[:4] == b'bill':
+            print("bill")
+            img_str = data[4:]
+            decoded_string = np.fromstring(base64.b64decode(img_str), np.uint8)
+            print(img_str[900:905])
+            img = cv2.imdecode(decoded_string, cv2.IMREAD_COLOR)
+            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            cv2.imwrite('from_android_bill.jpg', img)
+
+            with open('from_android_bill.jpg', 'rb') as f:
+                content = f.read();
+
+            save_path = "GCV_text.txt"
+            GCV_model(content,save_path)
+            with open(save_path, "r+", encoding="UTF-8") as file:
+                strings = file.readlines()
+            digit, text = CU(Input_ETRI,strings)
+            #GS(target_object,strings)
+            #Emart24(target_object,strings)
+            file.close()
+
+            print(digit)
+            print(text)
+            return "FINISH SMART BILL"
+        ########################################################
+
         if yolo_ready_flag == True:
 
             yolo_ready_flag = False
@@ -61,12 +131,12 @@ def detect():
             weights, imgsz = WEIGHTS, IMG_SIZE
 
             # Initialize
-            device = select_device(DEVICE)
+            #device = select_device(DEVICE)
             half = device.type != 'cpu'  # half precision only supported on CUDA
             # print('device:', device)
 
             # Load model
-            model = attempt_load(weights, map_location=device)  # load FP32 model
+            #model = attempt_load(weights, map_location=device)  # load FP32 model
             stride = int(model.stride.max())  # model stride
             imgsz = check_img_size(imgsz, s=stride)  # check img_size
             if half:
@@ -82,10 +152,14 @@ def detect():
 
             # Load image
             ### Decode base64 ################################
-            image_str = request.data
+            image_str = data
             decoded_string = np.fromstring(base64.b64decode(image_str), np.uint8)
+            print(image_str[900:905])
             img0 = cv2.imdecode(decoded_string, cv2.IMREAD_COLOR)
-            img0 = cv2.resize(img0, dsize=(640, 640), interpolation=cv2.INTER_CUBIC)
+            img0 = cv2.rotate(img0, cv2.ROTATE_90_CLOCKWISE)
+            cv2.imwrite('from_android_yolo.jpg', img0)
+            img0 = cv2.resize(img0, dsize=(IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_CUBIC)
+            #img0 = remove_bg(img0)
             # assert img0 is not None, 'Image Not Found ' + source
 
             # Padded resize
@@ -151,14 +225,44 @@ def detect():
                 _len_list.append(len(intersection))
             max_name.append(list(json_data.keys())[_len_list.index(max(_len_list))])
 
-            ### make dictionary for return value ###############################
-            _returns = {'box' : box_, 'max_name' : max_name, 'labels' : labels_}
-            ####################################################################
 
             yolo_ready_flag = True
-            print(box_,max_name,labels_)
+            print("Bounding Box :", box_)
+            print("Max_Category :", max_name)
+            print("label :", labels_)
 
-        return jsonify(_returns)
+
+            if ((object_detect_flag == False) and (target_category == max_name[0])): #Find Category?
+
+                ### Setting for Object Detecting ######
+                WEIGHTS = 'back_320small.pt'
+                IMG_SIZE = 320
+                object_detect_flag = True
+                #######################################
+                print("Find Target Category")
+                return "Find Target Category"
+
+
+            elif (object_detect_flag == True): #Find Object After Find Category?
+
+                for i in labels_:
+                    print(target_object, labels_)
+                    if (i.find(target_object) != -1):
+                        print("Find Target Object")
+                        return "Find Target Object"
+
+                if (target_category == max_name[0]): #Cannot Find Object? So, Check Max_Category
+                    print("Find Target Category But Not Object")
+                    return "Find Target Category But Not Object"
+
+                else:
+                    ### Setting to Return Category Detecting #####
+                    WEIGHTS = 'back_small.pt'
+                    IMG_SIZE = 640
+                    object_detect_flag = False
+                    ##############################################
+        print("Detecting ...")
+        return "Detecting ..."
 
     else:
         return "GET or else"
